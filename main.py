@@ -1,5 +1,6 @@
 
-from random import choice
+from random import choice, choices
+import os
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -9,18 +10,23 @@ from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
 from kivy.uix.button import Button
+from kivy.storage.jsonstore import JsonStore
 from kivy.core.window import Window
 
 Window.clearcolor = (.008, .018, .012, 1)
 
 
 class Board(Widget):
-    def __init__(self, **kw):
+
+    def __init__(self, store, **kw):
         super().__init__(**kw)
 
+        self.store = store
         self.n = 18
+
         self.snake = []
         self.food = None
+        self.food_type = "normal"
 
         self.direction = (1, 0)
         self.next_dir = (1, 0)
@@ -29,10 +35,16 @@ class Board(Widget):
         self.score = 0
         self.start_touch = None
 
+        self.mode = "Medium"
+
         self.bind(pos=self.draw, size=self.draw)
 
         self.reset()
         Clock.schedule_interval(self.step, .15)
+
+    def set_mode(self, mode):
+        self.mode = mode
+        self.reset()
 
     def reset(self):
         self.snake = [
@@ -44,6 +56,7 @@ class Board(Widget):
 
         self.score = 0
         self.running = False
+        self.start_touch = None
 
         self.spawn()
         self.draw()
@@ -63,23 +76,56 @@ class Board(Widget):
             if (x, y) not in self.snake
         ]
 
-        self.food = choice(free) if free else None
+        if not free:
+            self.food = None
+            self.running = False
+            return
+
+        self.food = choice(free)
+
+        if self.mode == "Easy":
+            types = [
+                "normal", "normal", "normal",
+                "normal", "normal", "green",
+                "green", "gold", "red"
+            ]
+
+            weights = [20, 20, 20, 20, 20, 7, 7, 3, 1]
+
+        else:
+            types = ["normal", "green", "gold"]
+            weights = [80, 15, 5]
+
+        self.food_type = choices(
+            types,
+            weights=weights,
+            k=1
+        )[0]
 
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
-            self.start_touch = touch.pos
+            self.start_touch = (
+                touch.uid,
+                touch.x,
+                touch.y
+            )
             return True
 
         return super().on_touch_down(touch)
 
     def on_touch_up(self, touch):
         if self.start_touch:
-            dx = touch.x - self.start_touch[0]
-            dy = touch.y - self.start_touch[1]
+            uid, start_x, start_y = self.start_touch
+
+            if uid != touch.uid:
+                return super().on_touch_up(touch)
+
+            dx = touch.x - start_x
+            dy = touch.y - start_y
 
             self.start_touch = None
 
-            if max(abs(dx), abs(dy)) > dp(18):
+            if max(abs(dx), abs(dy)) > dp(12):
 
                 if abs(dx) > abs(dy):
                     direction = (1, 0) if dx > 0 else (-1, 0)
@@ -87,8 +133,8 @@ class Board(Widget):
                     direction = (0, 1) if dy > 0 else (0, -1)
 
                 opposite = (
-                    -self.direction[0],
-                    -self.direction[1]
+                    -self.next_dir[0],
+                    -self.next_dir[1]
                 )
 
                 if direction != opposite:
@@ -109,27 +155,39 @@ class Board(Widget):
 
         head = (x + dx, y + dy)
 
-        # برخورد با دیوار یا بدن مار
-        if (
-            head[0] < 0
-            or head[0] >= self.n
-            or head[1] < 0
-            or head[1] >= self.n
-            or head in self.snake[:-1]
-        ):
-            self.running = False
+        if self.mode == "Easy":
+            head = (
+                head[0] % self.n,
+                head[1] % self.n
+            )
 
-            if hasattr(self, "over_cb"):
-                self.over_cb()
+        else:
+            if (
+                head[0] < 0
+                or head[0] >= self.n
+                or head[1] < 0
+                or head[1] >= self.n
+            ):
+                self.end_game()
+                return
 
-            self.draw()
+        if head in self.snake[:-1]:
+            self.end_game()
             return
 
         self.snake.insert(0, head)
 
-        # خوردن سیب
         if head == self.food:
-            self.score += 10
+
+            points = {
+                "normal": 2,
+                "green": 5,
+                "gold": 10,
+                "red": 30
+            }
+
+            self.score += points.get(self.food_type, 2)
+
             self.spawn()
 
             if hasattr(self, "score_cb"):
@@ -137,6 +195,14 @@ class Board(Widget):
 
         else:
             self.snake.pop()
+
+        self.draw()
+
+    def end_game(self):
+        self.running = False
+
+        if hasattr(self, "over_cb"):
+            self.over_cb()
 
         self.draw()
 
@@ -155,7 +221,6 @@ class Board(Widget):
 
         with self.canvas:
 
-            # قاب بیرونی
             Color(.02, .12, .045, .5)
 
             RoundedRectangle(
@@ -164,7 +229,6 @@ class Board(Widget):
                 radius=[dp(28)]
             )
 
-            # پس زمینه
             Color(.006, .018, .011, 1)
 
             RoundedRectangle(
@@ -173,7 +237,6 @@ class Board(Widget):
                 radius=[dp(26)]
             )
 
-            # شبکه زمین
             Color(.13, .23, .16, .38)
 
             for i in range(self.n + 1):
@@ -193,21 +256,30 @@ class Board(Widget):
                     width=.55
                 )
 
-            # سیب قرمز
             if self.food:
                 fx, fy = self.food
 
                 px = x0 + fx*cell
                 py = y0 + fy*cell
 
-                Color(.65, .015, .025, 1)
+                colors = {
+                    "normal": (.75, .025, .035, 1),
+                    "green": (.12, .95, .12, 1),
+                    "gold": (1, .72, .02, 1),
+                    "red": (1, .05, .05, 1)
+                }
+
+                Color(*colors.get(
+                    self.food_type,
+                    (.75, .025, .035, 1)
+                ))
 
                 Ellipse(
                     pos=(px+cell*.12, py+cell*.12),
                     size=(cell*.76, cell*.76)
                 )
 
-                Color(1, .38, .32, .9)
+                Color(1, 1, 1, .65)
 
                 Ellipse(
                     pos=(px+cell*.25, py+cell*.62),
@@ -229,7 +301,6 @@ class Board(Widget):
                     size=(cell*.3, cell*.14)
                 )
 
-            # بدن مار
             for i, (sx, sy) in enumerate(reversed(self.snake)):
 
                 px = x0 + sx*cell
@@ -265,7 +336,6 @@ class Board(Widget):
                     width=.7
                 )
 
-            # چشم سر مار
             hx, hy = self.snake[0]
 
             cx = x0 + (hx+.5)*cell
@@ -287,25 +357,53 @@ class Board(Widget):
 class LuxSnake(App):
 
     def build(self):
+        score_path = os.path.join(
+            self.user_data_dir,
+            "luxsnake_scores.json"
+        )
+
+        self.store = JsonStore(score_path)
+
+        self.best_score = 0
+        self.best_mode = "Medium"
+
+        if self.store.exists("best"):
+            data = self.store.get("best")
+            self.best_score = data["score"]
+            self.best_mode = data["mode"]
+
         root = FloatLayout()
 
         self.score = Label(
-            text="امتیاز: 0",
-            font_size="22sp",
+            text="Score: 0",
+            font_size="21sp",
             bold=True,
             color=(.55, 1, .4, 1),
-            size_hint=(1, None),
-            height=dp(48),
-            pos_hint={"top": 1}
+            size_hint=(.48, None),
+            height=dp(42),
+            pos_hint={"x": .01, "top": .99}
         )
 
         root.add_widget(self.score)
 
+        self.best = Label(
+            text=self.best_text(),
+            font_size="15sp",
+            bold=True,
+            color=(1, .82, .25, 1),
+            size_hint=(.50, None),
+            height=dp(42),
+            pos_hint={"right": .99, "top": .99}
+        )
+
+        root.add_widget(self.best)
+
         self.board = Board(
-            size_hint=(.96, .70),
+            self.store,
+            size_hint=(.96, .65),
             pos_hint={
                 "center_x": .5,
-                "center_y": .52
+                "center_y": .56
             }
         )
 
@@ -315,28 +413,50 @@ class LuxSnake(App):
         root.add_widget(self.board)
 
         self.info = Label(
-            text="برای تغییر مسیر، انگشتت را روی زمین بکش",
-            font_size="14sp",
+            text="Swipe to change direction",
+            font_size="13sp",
             color=(.72, .88, .72, 1),
             size_hint=(1, None),
-            height=dp(40),
+            height=dp(32),
             pos_hint={
                 "center_x": .5,
-                "y": .105
+                "y": .205
             }
         )
 
         root.add_widget(self.info)
 
+        self.easy_btn = self.make_mode_button(
+            "Easy",
+            .04,
+            (.12, .65, .18, 1)
+        )
+
+        self.medium_btn = self.make_mode_button(
+            "Medium",
+            .36,
+            (.12, .45, .75, 1)
+        )
+
+        self.hard_btn = self.make_mode_button(
+            "Hard",
+            .68,
+            (.75, .12, .12, 1)
+        )
+
+        root.add_widget(self.easy_btn)
+        root.add_widget(self.medium_btn)
+        root.add_widget(self.hard_btn)
+
         self.button = Button(
-            text="شروع بازی",
+            text="Start Game",
             font_size="18sp",
             bold=True,
             size_hint=(.55, None),
-            height=dp(52),
+            height=dp(48),
             pos_hint={
                 "center_x": .5,
-                "y": .025
+                "y": .015
             },
             background_normal="",
             background_color=(.16, .75, .12, 1),
@@ -344,23 +464,81 @@ class LuxSnake(App):
         )
 
         self.button.bind(on_release=self.start)
-
         root.add_widget(self.button)
+
+        self.refresh_mode_buttons()
 
         return root
 
+    def make_mode_button(self, text, x, color):
+        btn = Button(
+            text=text,
+            font_size="15sp",
+            bold=True,
+            size_hint=(.27, None),
+            height=dp(40),
+            pos_hint={"x": x, "y": .145},
+            background_normal="",
+            background_color=color
+        )
+
+        btn.bind(
+            on_release=lambda instance, mode=text:
+            self.select_mode(mode)
+        )
+
+        return btn
+
+    def refresh_mode_buttons(self):
+        selected = self.board.mode
+
+        self.easy_btn.opacity = 1 if selected == "Easy" else .55
+        self.medium_btn.opacity = 1 if selected == "Medium" else .55
+        self.hard_btn.opacity = 1 if selected == "Hard" else .55
+
+    def select_mode(self, mode):
+        self.board.set_mode(mode)
+
+        self.info.text = {
+            "Easy": "Easy: Wall wrapping enabled",
+            "Medium": "Medium: Standard rules",
+            "Hard": "Hard: Wall collision = Game Over"
+        }[mode]
+
+        self.button.text = "Start Game"
+        self.refresh_mode_buttons()
+        self.update_score(0)
+
+    def best_text(self):
+        return (
+            f"Best: {self.best_score} "
+            f"({self.best_mode})"
+        )
+
     def update_score(self, score):
-        self.score.text = f"امتیاز: {score}"
+        self.score.text = f"Score: {score}"
+
+        if score > self.best_score:
+            self.best_score = score
+            self.best_mode = self.board.mode
+
+            self.store.put(
+                "best",
+                score=self.best_score,
+                mode=self.best_mode
+            )
+
+            self.best.text = self.best_text()
 
     def game_over(self):
-        self.info.text = "بازی تمام شد! دوباره شروع کن"
-
+        self.info.text = "Game Over! Try Again"
+        
     def start(self, *args):
         self.board.begin()
 
-        self.info.text = "با کشیدن انگشت، مسیر مار را عوض کن"
-
-        self.button.text = "شروع دوباره"
+        self.info.text = "Swipe to control the snake"
+        self.button.text = "Restart"
+        self.update_score(0)
 
 
 if __name__ == "__main__":
