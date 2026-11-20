@@ -155,12 +155,14 @@ class Board(Widget):
 
         head = (x + dx, y + dy)
 
-        if self.mode == "Easy":
+        # Easy and Medium: Wrap around the walls
+        if self.mode in ("Easy", "Medium"):
             head = (
                 head[0] % self.n,
                 head[1] % self.n
             )
 
+        # Hard: Hitting a wall ends the game
         else:
             if (
                 head[0] < 0
@@ -266,7 +268,7 @@ class Board(Widget):
                     "normal": (.75, .025, .035, 1),
                     "green": (.12, .95, .12, 1),
                     "gold": (1, .72, .02, 1),
-                    "red": (1, .05, .05, 1)
+                    "red": (.05, .35, 1, 1)
                 }
 
                 Color(*colors.get(
@@ -501,7 +503,7 @@ class LuxSnake(App):
 
         self.info.text = {
             "Easy": "Easy: Wall wrapping enabled",
-            "Medium": "Medium: Standard rules",
+            "Medium": "Medium: Wall wrapping enabled",
             "Hard": "Hard: Wall collision = Game Over"
         }[mode]
 
@@ -532,7 +534,7 @@ class LuxSnake(App):
 
     def game_over(self):
         self.info.text = "Game Over! Try Again"
-        
+
     def start(self, *args):
         self.board.begin()
 
